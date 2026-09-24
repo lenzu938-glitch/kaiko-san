@@ -1,0 +1,1 @@
+export { default } from '../high_school_community_app (1).tsx';
