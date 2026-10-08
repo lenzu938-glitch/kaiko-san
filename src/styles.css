@@ -1,5 +1,59 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap');
+
 html {
   background: #f8fafc;
+}
+
+.profile-setup-page {
+  background: radial-gradient(ellipse at top left, #e5edff 0%, transparent 48%), #f8fafc;
+  color: #1e293b;
+  font-family: 'Noto Sans JP', sans-serif;
+}
+
+.profile-setup-panel {
+  box-shadow: 0 24px 70px rgb(30 64 175 / 0.12);
+}
+
+.profile-step {
+  animation: profile-step-in 240ms ease-out both;
+}
+
+.profile-primary-button,
+.bg-custom-blue {
+  background-color: #1100ff;
+}
+
+.profile-primary-button:hover,
+.bg-custom-blue:hover {
+  background-color: #0000d6;
+}
+
+.text-custom-blue {
+  color: #1100ff;
+}
+
+.bg-pill-gray {
+  background-color: #ccd5dd;
+}
+
+.profile-input {
+  border: 2px solid transparent;
+  outline: none;
+}
+
+.profile-input:focus {
+  border-color: #1100ff;
+  box-shadow: 0 0 0 3px rgb(17 0 255 / 0.14);
+}
+
+.profile-avatar-button:focus-visible {
+  outline: 3px solid rgb(17 0 255 / 0.45);
+  outline-offset: 4px;
+}
+
+@keyframes profile-step-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 body {

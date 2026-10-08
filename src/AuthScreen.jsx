@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import ProfileSetupScreen from './ProfileSetupScreen.jsx';
 
 const initialRegisterForm = {
   email: '',
@@ -16,6 +17,7 @@ export default function AuthScreen({ onLogin }) {
   const [registerForm, setRegisterForm] = useState(initialRegisterForm);
   const [loginMessage, setLoginMessage] = useState(null);
   const [registerMessage, setRegisterMessage] = useState(null);
+  const [profileIdentity, setProfileIdentity] = useState({ studentId: '', classNum: '1組' });
 
   const updateLogin = (event) => {
     setLoginForm({ ...loginForm, [event.target.name]: event.target.value });
@@ -35,7 +37,8 @@ export default function AuthScreen({ onLogin }) {
       return;
     }
 
-    onLogin({ studentId: loginForm.email, handleName: loginForm.email.split('@')[0] || '海校たろう', classNum: loginForm.classNum });
+    setProfileIdentity({ studentId: loginForm.email, classNum: loginForm.classNum });
+    setPage('profile');
   };
 
   const handleRegister = (event) => {
@@ -48,14 +51,20 @@ export default function AuthScreen({ onLogin }) {
       return;
     }
 
-    setRegisterMessage({ type: 'success', text: '新規登録が完了しました。ログイン画面へ移動します。' });
-    setLoginForm({ email: registerForm.email, password: '' });
-    setRegisterForm(initialRegisterForm);
-    window.setTimeout(() => {
-      setPage('login');
-      setRegisterMessage(null);
-    }, 700);
+    setProfileIdentity({ studentId: registerForm.studentId, classNum: registerForm.classNum });
+    setPage('profile');
   };
+
+  if (page === 'profile') {
+    return (
+      <ProfileSetupScreen
+        onComplete={(profile) => onLogin({
+          ...profileIdentity,
+          ...profile,
+        })}
+      />
+    );
+  }
 
   if (page === 'register') {
     return (
