@@ -70,7 +70,7 @@ export default function AuthScreen({ onLogin }) {
     return (
       <main className="auth-register-page">
         <section className="auth-register-brand">
-          <p className="auth-eyebrow">海校さん</p>
+          <p className="auth-eyebrow">海高さん</p>
           <h1>新規登録</h1>
           <p>学校の仲間とつながるためのアカウントを作成します。</p>
         </section>
@@ -95,7 +95,7 @@ export default function AuthScreen({ onLogin }) {
     <main className="auth-login-page">
       <div className="auth-login-container">
         <section className="auth-login-section">
-          <p className="auth-eyebrow">海校さん</p>
+          <p className="auth-eyebrow">海高さん</p>
           <h1>ログイン</h1>
           <form className="auth-form" onSubmit={handleLogin} noValidate>
             <label>メールアドレス<input name="email" type="email" autoComplete="email" value={loginForm.email} onChange={updateLogin} required /></label>

@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import AuthScreen from './src/AuthScreen.jsx';
+import GroupVoiceRoom from './src/GroupVoiceRoom.jsx';
+import StoryAndNotes from './src/StoryAndNotes.jsx';
+import Minigames from './src/Minigames.jsx';
 import { 
   Home, 
   BookOpen, 
@@ -27,6 +30,8 @@ import {
   ArrowLeft,
   Phone,
   PhoneOff,
+  Headphones,
+  Gamepad2,
   Mic,
   MicOff,
   Paperclip,
@@ -133,6 +138,32 @@ const requestAiReply = async (message, context = '') => {
   return result.reply;
 };
 
+const loadAccountPrivacy = (studentId) => {
+  try {
+    const savedSettings = JSON.parse(window.localStorage.getItem(`campus-account-privacy:${studentId}`) || '{}');
+    return {
+      isPrivate: Boolean(savedSettings.isPrivate),
+      approvedAccounts: Array.isArray(savedSettings.approvedAccounts)
+        ? savedSettings.approvedAccounts.filter(account => typeof account === 'string')
+        : []
+    };
+  } catch {
+    return { isPrivate: false, approvedAccounts: [] };
+  }
+};
+
+const loadSocialConnections = (studentId) => {
+  try {
+    const savedConnections = JSON.parse(window.localStorage.getItem(`campus-social-connections:${studentId}`) || '{}');
+    return {
+      following: Array.isArray(savedConnections.following) ? savedConnections.following.filter(name => typeof name === 'string') : [],
+      blocked: Array.isArray(savedConnections.blocked) ? savedConnections.blocked.filter(name => typeof name === 'string') : []
+    };
+  } catch {
+    return { following: [], blocked: [] };
+  }
+};
+
 export default function App() {
   // Auth state
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -147,6 +178,15 @@ export default function App() {
     interests: [],
     bio: ''
   });
+  const [accountPrivacy, setAccountPrivacy] = useState(() => loadAccountPrivacy('20240182'));
+  const [approvedAccountInput, setApprovedAccountInput] = useState('');
+  const [socialConnections, setSocialConnections] = useState(() => loadSocialConnections('20240182'));
+  const [activeProfileName, setActiveProfileName] = useState(null);
+
+  useEffect(() => {
+    setAccountPrivacy(loadAccountPrivacy(schoolInfo.studentId));
+    setSocialConnections(loadSocialConnections(schoolInfo.studentId));
+  }, [schoolInfo.studentId]);
 
   // App UI state
   const [activeTab, setActiveTab] = useState('home'); // 'home', 'study', 'polls', 'lounge', 'messages', 'profile'
@@ -215,6 +255,57 @@ export default function App() {
     if (schoolInfo.schoolName && schoolInfo.studentId) {
       setIsAuthenticated(true);
     }
+  };
+
+  const saveAccountPrivacy = (nextSettings) => {
+    setAccountPrivacy(nextSettings);
+    try {
+      window.localStorage.setItem(`campus-account-privacy:${schoolInfo.studentId}`, JSON.stringify(nextSettings));
+    } catch {
+      // Keep the current setting for this session if browser storage is unavailable.
+    }
+  };
+
+  const saveSocialConnections = (nextConnections) => {
+    setSocialConnections(nextConnections);
+    try {
+      window.localStorage.setItem(`campus-social-connections:${schoolInfo.studentId}`, JSON.stringify(nextConnections));
+    } catch {
+      // Keep the current relationships for this session if browser storage is unavailable.
+    }
+  };
+
+  const toggleFollow = (accountName) => {
+    if (socialConnections.blocked.includes(accountName)) return;
+    const following = socialConnections.following.includes(accountName)
+      ? socialConnections.following.filter(name => name !== accountName)
+      : [...socialConnections.following, accountName];
+    saveSocialConnections({ ...socialConnections, following });
+  };
+
+  const toggleBlock = (accountName) => {
+    const isBlocked = socialConnections.blocked.includes(accountName);
+    saveSocialConnections({
+      following: isBlocked ? socialConnections.following : socialConnections.following.filter(name => name !== accountName),
+      blocked: isBlocked
+        ? socialConnections.blocked.filter(name => name !== accountName)
+        : [...socialConnections.blocked, accountName]
+    });
+    if (!isBlocked && selectedDmContact === accountName) {
+      selectedDmContactRef.current = null;
+      setSelectedDmContact(null);
+    }
+  };
+
+  const handleApproveAccount = (e) => {
+    e.preventDefault();
+    const accountName = approvedAccountInput.trim().replace(/^@/, '');
+    if (!accountName || accountName === schoolInfo.handleName || accountPrivacy.approvedAccounts.includes(accountName)) return;
+    saveAccountPrivacy({
+      ...accountPrivacy,
+      approvedAccounts: [...accountPrivacy.approvedAccounts, accountName]
+    });
+    setApprovedAccountInput('');
   };
 
   const handleCreatePost = (e) => {
@@ -498,6 +589,7 @@ export default function App() {
 
   // Filter logic
   const filteredPosts = posts.filter(post => {
+    if (socialConnections.blocked.includes(post.authorName)) return false;
     const matchesTag = selectedTag === 'すべて' || post.category === selectedTag;
     const matchesGrade = selectedGradeFilter === 'すべて' || post.targetGrade === '全学年' || post.targetGrade === selectedGradeFilter;
     const matchesSearch = post.content.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -515,9 +607,17 @@ export default function App() {
     ...Object.keys(dmThreads)
   ])).filter(contact => (
     contact && contact !== '匿名高校生' && contact !== 'AIアシスタント' &&
+    !socialConnections.blocked.includes(contact) &&
     contact !== schoolInfo.handleName && !contact.includes(`_${schoolInfo.handleName}`)
   ));
   const filteredDmContacts = dmContacts.filter(contact => contact.toLowerCase().includes(dmSearchQuery.trim().toLowerCase()));
+  const activeProfilePosts = activeProfileName ? posts.filter(post => post.authorName === activeProfileName) : [];
+  const activeProfilePost = activeProfilePosts[0];
+  const isOwnProfile = Boolean(activeProfileName && activeProfileName.includes(schoolInfo.handleName));
+  const isProfileBlocked = activeProfileName ? socialConnections.blocked.includes(activeProfileName) : false;
+  const isProfileFollowed = activeProfileName ? socialConnections.following.includes(activeProfileName) : false;
+  const visibleCommentCount = post => post.comments.filter(comment => !socialConnections.blocked.includes(comment.author)).length;
+  const visibleComments = activeCommentPost?.comments.filter(comment => !socialConnections.blocked.includes(comment.author)) || [];
 
   if (!isAuthenticated) {
     return (
@@ -575,6 +675,8 @@ export default function App() {
                 { id: 'polls', label: '校内アンケート', icon: BarChart2 },
                 { id: 'lounge', label: `${schoolInfo.grade}${schoolInfo.classNum}ラウンジ`, icon: Users },
                 { id: 'messages', label: 'ダイレクトメッセージ', icon: MessageSquare },
+                { id: 'voice', label: 'グループ', icon: Headphones },
+                { id: 'games', label: 'ミニゲーム', icon: Gamepad2 },
                 { id: 'profile', label: 'マイページ', icon: User },
               ].map(item => {
                 const Icon = item.icon;
@@ -694,6 +796,8 @@ export default function App() {
                 </div>
               </div>
 
+              <StoryAndNotes displayName={schoolInfo.handleName} avatar={schoolInfo.avatar} />
+
               {/* Feed List */}
               <div className="divide-y divide-slate-100 dark:divide-slate-800">
                 {filteredPosts.length === 0 ? (
@@ -718,7 +822,12 @@ export default function App() {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between mb-1">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-bold text-sm">{post.authorName}</span>
+                              <button
+                                type="button"
+                                onClick={() => !post.isAnonymous && setActiveProfileName(post.authorName)}
+                                disabled={post.isAnonymous}
+                                className="font-bold text-sm text-left enabled:hover:underline disabled:cursor-default"
+                              >{post.authorName}</button>
                               <span className="text-xs text-slate-400">・{post.timestamp}</span>
                               <span className="text-[10px] px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 font-medium">
                                 {post.category}
@@ -764,7 +873,7 @@ export default function App() {
                               className="flex items-center gap-1.5 hover:text-indigo-600 transition"
                             >
                               <MessageCircle className="w-4 h-4" />
-                              <span>{post.comments.length}</span>
+                              <span>{visibleCommentCount(post)}</span>
                             </button>
 
                             <button
@@ -1099,6 +1208,17 @@ export default function App() {
           )}
 
           {/* TAB 6: Profile */}
+          {activeTab === 'voice' && (
+            <GroupVoiceRoom
+              displayName={schoolInfo.handleName}
+            />
+          )}
+
+          {activeTab === 'games' && (
+            <Minigames displayName={schoolInfo.handleName} schoolName={schoolInfo.schoolName} />
+          )}
+
+          {/* TAB 7: Profile */}
           {activeTab === 'profile' && (
             <div className="p-6 space-y-6">
               <div className="text-center space-y-3">
@@ -1126,6 +1246,66 @@ export default function App() {
                   <div className="flex justify-between"><span>学籍番号</span><span className="font-semibold text-slate-800 dark:text-slate-100">●●●●{schoolInfo.studentId.slice(-4)}</span></div>
                 </div>
               </div>
+
+              <section className="rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
+                <div className="mb-3 flex items-center gap-2">
+                  <Lock className="h-4 w-4 text-slate-500" />
+                  <h3 className="text-sm font-bold">アカウントの公開範囲</h3>
+                </div>
+                <label className="flex cursor-pointer items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={accountPrivacy.isPrivate}
+                    onChange={event => saveAccountPrivacy({ ...accountPrivacy, isPrivate: event.target.checked })}
+                    className="mt-0.5 h-4 w-4 shrink-0 accent-indigo-600"
+                  />
+                  <span>
+                    <span className="block text-xs font-semibold">鍵アカウントにする</span>
+                    <span className="mt-1 block text-[11px] leading-relaxed text-slate-500">許可するアカウントをリストで管理します。</span>
+                  </span>
+                </label>
+
+                {accountPrivacy.isPrivate && (
+                  <div className="mt-4 border-t border-slate-100 pt-4 dark:border-slate-800">
+                    <form onSubmit={handleApproveAccount} className="flex gap-2">
+                      <input
+                        value={approvedAccountInput}
+                        onChange={event => setApprovedAccountInput(event.target.value)}
+                        maxLength={40}
+                        placeholder="許可するアカウント名"
+                        aria-label="許可するアカウント名"
+                        className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-900"
+                      />
+                      <button type="submit" disabled={!approvedAccountInput.trim()} className="flex items-center gap-1.5 rounded-lg bg-slate-800 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-200 dark:text-slate-900">
+                        <Plus className="h-3.5 w-3.5" />追加
+                      </button>
+                    </form>
+                    <ul className="mt-2 divide-y divide-slate-100 dark:divide-slate-800">
+                      {accountPrivacy.approvedAccounts.map(account => (
+                        <li key={account} className="flex items-center gap-2 py-2 text-xs">
+                          <span className="min-w-0 flex-1 truncate">@{account}</span>
+                          <button
+                            type="button"
+                            onClick={() => saveAccountPrivacy({
+                              ...accountPrivacy,
+                              approvedAccounts: accountPrivacy.approvedAccounts.filter(item => item !== account)
+                            })}
+                            aria-label={`@${account} の許可を解除`}
+                            title="許可を解除"
+                            className="rounded-lg p-1.5 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    {accountPrivacy.approvedAccounts.length === 0 && <p className="mt-3 text-[11px] text-slate-400">許可済みアカウントはありません。</p>}
+                  </div>
+                )}
+                <p className="mt-4 rounded-lg bg-amber-50 p-3 text-[11px] leading-relaxed text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                  試作版では設定と許可リストをこのブラウザーに保存するだけで、他の利用者からの閲覧をサーバー側で制限しません。実際の鍵アカウント機能として公開するには、本人確認とサーバー側のアクセス制御が必要です。
+                </p>
+              </section>
 
               {(schoolInfo.gender || schoolInfo.interests.length > 0 || schoolInfo.bio) && (
                 <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3">
@@ -1331,19 +1511,19 @@ export default function App() {
 
             {/* Original Post Preview */}
             <div className="p-3 bg-slate-50 dark:bg-slate-700/40 rounded-xl text-xs space-y-1">
-              <div className="font-bold text-indigo-600 dark:text-indigo-400">{activeCommentPost.authorName}</div>
+              <button type="button" onClick={() => !activeCommentPost.isAnonymous && setActiveProfileName(activeCommentPost.authorName)} disabled={activeCommentPost.isAnonymous} className="font-bold text-indigo-600 enabled:hover:underline disabled:cursor-default dark:text-indigo-400">{activeCommentPost.authorName}</button>
               <div className="text-slate-700 dark:text-slate-300">{activeCommentPost.content}</div>
             </div>
 
             {/* Comments List */}
             <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-              {activeCommentPost.comments.length === 0 ? (
-                <p className="text-xs text-center text-slate-400 py-6">まだコメントはありません。</p>
+              {visibleComments.length === 0 ? (
+                <p className="text-xs text-center text-slate-400 py-6">{activeCommentPost.comments.length === 0 ? 'まだコメントはありません。' : 'ブロックした相手のコメントは非表示です。'}</p>
               ) : (
-                activeCommentPost.comments.map(comment => (
+                visibleComments.map(comment => (
                   <div key={comment.id} className="p-3 bg-slate-100/60 dark:bg-slate-700/20 rounded-xl space-y-1 text-xs">
                     <div className="flex justify-between font-bold">
-                      <span className={comment.isAi ? 'text-indigo-600 dark:text-indigo-300' : ''}>{comment.author}</span>
+                      <button type="button" onClick={() => !comment.isAi && comment.author !== '匿名高校生' && setActiveProfileName(comment.author)} disabled={comment.isAi || comment.author === '匿名高校生'} className={`text-left enabled:hover:underline disabled:cursor-default ${comment.isAi ? 'text-indigo-600 dark:text-indigo-300' : ''}`}>{comment.author}</button>
                       <span className="text-[10px] text-slate-400 font-normal">{comment.timestamp}</span>
                     </div>
                     <p className="text-slate-700 dark:text-slate-300">{comment.text}</p>
@@ -1369,6 +1549,77 @@ export default function App() {
               </button>
             </form>
           </div>
+        </div>
+      )}
+
+      {activeProfileName && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm" onMouseDown={event => { if (event.target === event.currentTarget) setActiveProfileName(null); }}>
+          <section className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900" role="dialog" aria-modal="true" aria-labelledby="user-profile-title">
+            <header className="flex items-center justify-between border-b border-slate-200 p-4 dark:border-slate-800">
+              <h2 className="text-sm font-bold">プロフィール</h2>
+              <button type="button" onClick={() => setActiveProfileName(null)} className="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="プロフィールを閉じる">
+                <X className="h-5 w-5" />
+              </button>
+            </header>
+            <div className="overflow-y-auto p-5">
+              <div className="flex items-start gap-4">
+                {isOwnProfile && schoolInfo.avatar ? (
+                  <img src={schoolInfo.avatar} alt="プロフィール画像" className="h-16 w-16 shrink-0 rounded-full object-cover" />
+                ) : (
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-xl font-bold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-200">{activeProfileName.slice(0, 1)}</div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <h3 id="user-profile-title" className="truncate text-lg font-bold">{activeProfileName}</h3>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    {isOwnProfile
+                      ? `${schoolInfo.schoolName}・${schoolInfo.grade}${schoolInfo.classNum}`
+                      : activeProfilePost
+                        ? `${activeProfilePost.authorGrade} ${activeProfilePost.authorClass}`
+                        : '校内メンバー'}
+                  </p>
+                </div>
+              </div>
+
+              {!isOwnProfile && (
+                <div className="mt-5 flex gap-2">
+                  <button type="button" onClick={() => toggleFollow(activeProfileName)} disabled={isProfileBlocked} className={`flex-1 rounded-lg px-4 py-2.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${isProfileFollowed ? 'border border-slate-300 text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}>
+                    {isProfileBlocked ? 'ブロック中' : isProfileFollowed ? 'フォロー中' : 'フォロー'}
+                  </button>
+                  <button type="button" onClick={() => toggleBlock(activeProfileName)} className={`rounded-lg border px-4 py-2.5 text-xs font-bold transition ${isProfileBlocked ? 'border-rose-300 text-rose-700 hover:bg-rose-50 dark:border-rose-900 dark:text-rose-300 dark:hover:bg-rose-950' : 'border-slate-300 text-slate-700 hover:border-rose-300 hover:text-rose-700 dark:border-slate-700 dark:text-slate-200'}`}>
+                    {isProfileBlocked ? 'ブロック解除' : 'ブロック'}
+                  </button>
+                </div>
+              )}
+
+              {isOwnProfile && schoolInfo.bio && <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-slate-700 dark:text-slate-200">{schoolInfo.bio}</p>}
+              {isOwnProfile && schoolInfo.interests.length > 0 && (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {schoolInfo.interests.map(interest => <span key={interest} className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300">{interest}</span>)}
+                </div>
+              )}
+
+              <section className="mt-6 border-t border-slate-200 pt-4 dark:border-slate-800">
+                <h4 className="mb-3 text-xs font-bold">投稿 <span className="font-normal text-slate-400">{isProfileBlocked ? 0 : activeProfilePosts.length}</span></h4>
+                {isProfileBlocked ? (
+                  <p className="py-6 text-center text-xs text-slate-400">ブロック中のため投稿を非表示にしています。</p>
+                ) : activeProfilePosts.length === 0 ? (
+                  <p className="py-6 text-center text-xs text-slate-400">表示できる投稿はありません。</p>
+                ) : (
+                  <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {activeProfilePosts.map(post => (
+                      <article key={post.id} className="py-3">
+                        <div className="mb-1 flex items-center justify-between gap-2 text-[10px] text-slate-400">
+                          <span>{post.category}</span><span>{post.timestamp}</span>
+                        </div>
+                        <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700 dark:text-slate-200">{post.content}</p>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+              <p className="mt-3 text-[10px] leading-relaxed text-slate-400">フォローとブロックはこのブラウザー内に保存される試作機能です。</p>
+            </div>
+          </section>
         </div>
       )}
 
