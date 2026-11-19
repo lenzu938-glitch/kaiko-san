@@ -127,17 +127,6 @@ const STUDY_NOTES = [
   { id: 's3', title: '【英語】文法比較ライティング頻出表現20選', author: '帰国子女A', subject: '英語', likes: 112, downloads: 95 }
 ];
 
-const requestAiReply = async (message, context = '') => {
-  const response = await fetch('/api/ai-reply', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, context })
-  });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error || 'AIの返信を作成できませんでした。');
-  return result.reply;
-};
-
 const loadAccountPrivacy = (studentId) => {
   try {
     const savedSettings = JSON.parse(window.localStorage.getItem(`campus-account-privacy:${studentId}`) || '{}');
@@ -164,6 +153,9 @@ const loadSocialConnections = (studentId) => {
   }
 };
 
+const getDmIdentity = schoolInfo =>
+  `${schoolInfo.grade}${schoolInfo.classNum}_${schoolInfo.handleName}`;
+
 export default function App() {
   // Auth state
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -182,6 +174,7 @@ export default function App() {
   const [approvedAccountInput, setApprovedAccountInput] = useState('');
   const [socialConnections, setSocialConnections] = useState(() => loadSocialConnections('20240182'));
   const [activeProfileName, setActiveProfileName] = useState(null);
+  const dmIdentity = getDmIdentity(schoolInfo);
 
   useEffect(() => {
     setAccountPrivacy(loadAccountPrivacy(schoolInfo.studentId));
@@ -213,6 +206,28 @@ export default function App() {
   const [activeCommentPost, setActiveCommentPost] = useState(null);
   const [commentInput, setCommentInput] = useState('');
 
+  useEffect(() => {
+    let active = true;
+    const loadSharedPosts = async () => {
+      try {
+        const response = await fetch('/api/community/posts', { cache: 'no-store' });
+        if (!response.ok) return;
+        const result = await response.json();
+        if (active && Array.isArray(result.posts) && result.posts.length > 0) {
+          setPosts(result.posts);
+        }
+      } catch {
+        // Keep the built-in posts if the shared server is temporarily unavailable.
+      }
+    };
+    loadSharedPosts();
+    const pollTimer = window.setInterval(loadSharedPosts, 3000);
+    return () => {
+      active = false;
+      window.clearInterval(pollTimer);
+    };
+  }, []);
+
   // Class lounge chat state
   const [loungeMessages, setLoungeMessages] = useState([
     { id: 'm1', sender: '2年B組委員長', text: 'みんなー！来週の席替えの希望アンケート提出忘れずにね！', time: '12:30' },
@@ -223,11 +238,13 @@ export default function App() {
 
   // Direct message state
   const [dmThreads, setDmThreads] = useState({});
+  const dmThreadsRef = useRef({});
   const [selectedDmContact, setSelectedDmContact] = useState(null);
   const [dmSearchQuery, setDmSearchQuery] = useState('');
   const [newDmMessage, setNewDmMessage] = useState('');
   const [newDmImages, setNewDmImages] = useState([]);
   const [dmMediaError, setDmMediaError] = useState('');
+  const [dmSendError, setDmSendError] = useState('');
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [activeCallContact, setActiveCallContact] = useState(null);
   const [callDemoSeconds, setCallDemoSeconds] = useState(0);
@@ -329,7 +346,16 @@ export default function App() {
       images: newPostImages
     };
 
-    setPosts([newPost, ...posts]);
+    fetch('/api/community/posts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newPost)
+    })
+      .then(response => response.json())
+      .then(result => {
+        if (result.post) setPosts(current => [result.post, ...current.filter(post => post.id !== result.post.id)]);
+      })
+      .catch(() => setPosts([newPost, ...posts]));
     setNewPostContent('');
     setNewPostImages([]);
     setPostImageError('');
@@ -367,16 +393,24 @@ export default function App() {
   };
 
   const handleLike = (postId) => {
+    const targetPost = posts.find(post => post.id === postId);
+    if (!targetPost) return;
+    const nextIsLiked = !targetPost.isLiked;
     setPosts(posts.map(post => {
       if (post.id === postId) {
         return {
           ...post,
           likes: post.isLiked ? post.likes - 1 : post.likes + 1,
-          isLiked: !post.isLiked
+          isLiked: nextIsLiked
         };
       }
       return post;
     }));
+    fetch(`/api/community/posts/${encodeURIComponent(postId)}/like`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isLiked: nextIsLiked })
+    }).catch(() => {});
   };
 
   const handleAddComment = (e) => {
@@ -388,32 +422,16 @@ export default function App() {
       id: Date.now().toString(),
       author: `${schoolInfo.grade}${schoolInfo.classNum}_${schoolInfo.handleName}`,
       text: commentInput,
-      timestamp: 'たった今',
-      aiReplyStatus: 'pending'
+      timestamp: 'たった今'
     };
 
     updatePostComments(postId, comments => [...comments, newComment]);
     setCommentInput('');
-
-    requestAiReply(newComment.text, activeCommentPost.content)
-      .then(reply => {
-        const aiComment = {
-          id: `ai-${Date.now()}`,
-          author: 'AIアシスタント',
-          text: reply,
-          timestamp: 'たった今',
-          isAi: true
-        };
-        updatePostComments(postId, comments => [
-          ...comments.map(comment => comment.id === newComment.id ? { ...comment, aiReplyStatus: 'done' } : comment),
-          aiComment
-        ]);
-      })
-      .catch(error => {
-        updatePostComments(postId, comments => comments.map(comment => (
-          comment.id === newComment.id ? { ...comment, aiReplyStatus: 'error', aiReplyError: error.message } : comment
-        )));
-      });
+    fetch(`/api/community/posts/${encodeURIComponent(postId)}/comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comment: newComment })
+    }).catch(() => {});
   };
 
   const updatePostComments = (postId, updateComments) => {
@@ -450,31 +468,11 @@ export default function App() {
       id: Date.now().toString(),
       sender: schoolInfo.handleName,
       text: newLoungeMsg,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      aiReplyStatus: 'pending'
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
     setLoungeMessages(current => [...current, msg]);
     setNewLoungeMsg('');
-
-    requestAiReply(msg.text)
-      .then(reply => {
-        setLoungeMessages(current => [
-          ...current.map(message => message.id === msg.id ? { ...message, aiReplyStatus: 'done' } : message),
-          {
-            id: `ai-${Date.now()}`,
-            sender: 'AIアシスタント',
-            text: reply,
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            isAi: true
-          }
-        ]);
-      })
-      .catch(error => {
-        setLoungeMessages(current => current.map(message => (
-          message.id === msg.id ? { ...message, aiReplyStatus: 'error', aiReplyError: error.message } : message
-        )));
-      });
   };
 
   const appendDmMessage = (contact, message) => {
@@ -483,6 +481,61 @@ export default function App() {
       [contact]: [...(current[contact] || []), message]
     }));
   };
+
+  useEffect(() => {
+    dmThreadsRef.current = dmThreads;
+  }, [dmThreads]);
+
+  useEffect(() => {
+    let active = true;
+    const loadInbox = async () => {
+      try {
+        const response = await fetch(`/api/community/dm/threads?handle=${encodeURIComponent(dmIdentity)}`, { cache: 'no-store' });
+        if (!response.ok) return;
+        const result = await response.json();
+        if (active && result.threads && typeof result.threads === 'object') {
+          setDmThreads(current => ({ ...current, ...result.threads }));
+        }
+      } catch {
+        // Keep the last loaded inbox if the server is temporarily unavailable.
+      }
+    };
+    if (dmIdentity) {
+      loadInbox();
+      const pollTimer = window.setInterval(loadInbox, 2000);
+      return () => {
+        active = false;
+        window.clearInterval(pollTimer);
+      };
+    }
+    return undefined;
+  }, [dmIdentity]);
+
+  useEffect(() => {
+    if (!selectedDmContact) return undefined;
+    const pairKey = [dmIdentity, selectedDmContact].sort().join('|');
+    let active = true;
+
+    const loadThread = async () => {
+      try {
+        const response = await fetch(`/api/community/dm?pair=${encodeURIComponent(pairKey)}`, { cache: 'no-store' });
+        if (!response.ok) return;
+        const result = await response.json();
+        if (active && Array.isArray(result.messages)) {
+          setDmThreads(current => ({ ...current, [selectedDmContact]: result.messages }));
+        }
+      } catch {
+        // Keep the last loaded thread if the server is temporarily unavailable.
+      }
+    };
+
+    loadThread();
+    const pollTimer = window.setInterval(loadThread, 2000);
+    return () => {
+      active = false;
+      window.clearInterval(pollTimer);
+    };
+  }, [selectedDmContact, dmIdentity]);
 
   const openDmContact = (contact) => {
     selectedDmContactRef.current = contact;
@@ -499,12 +552,35 @@ export default function App() {
 
     const message = {
       id: `dm-${Date.now()}`,
-      sender: schoolInfo.handleName,
+      sender: dmIdentity,
       text,
       images: newDmImages,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
     appendDmMessage(selectedDmContact, message);
+    setDmSendError('');
+    const pairKey = [dmIdentity, selectedDmContact].sort().join('|');
+    fetch(`/api/community/dm?pair=${encodeURIComponent(pairKey)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message })
+    })
+      .then(response => {
+        if (!response.ok) throw new Error('送信に失敗しました');
+        return response.json();
+      })
+      .then(result => {
+        if (result.message) {
+          setDmThreads(current => ({
+            ...current,
+            [selectedDmContact]: [
+              ...(current[selectedDmContact] || []).filter(item => item.id !== message.id),
+              result.message
+            ]
+          }));
+        }
+      })
+      .catch(() => setDmSendError('メッセージをサーバーへ送信できませんでした。接続を確認してください。'));
     setNewDmMessage('');
     setNewDmImages([]);
     setDmMediaError('');
@@ -563,14 +639,26 @@ export default function App() {
         voiceRecorderRef.current = null;
         setIsRecordingVoice(false);
         if (blob.size > 0) {
-          appendDmMessage(contact, {
+          const message = {
             id: `dm-voice-${Date.now()}`,
-            sender: schoolInfo.handleName,
+            sender: dmIdentity,
             type: 'voice',
             audioUrl: URL.createObjectURL(blob),
             duration: Math.max(1, Math.round((Date.now() - startedAt) / 1000)),
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          });
+          };
+          appendDmMessage(contact, message);
+          const pairKey = [dmIdentity, contact].sort().join('|');
+          fetch(`/api/community/dm?pair=${encodeURIComponent(pairKey)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: {
+                ...message,
+                audioUrl: ''
+              }
+            })
+          }).catch(() => setDmSendError('ボイスメッセージをサーバーへ送信できませんでした。'));
         }
       };
       voiceRecorderRef.current = recorder;
@@ -606,9 +694,9 @@ export default function App() {
     ]),
     ...Object.keys(dmThreads)
   ])).filter(contact => (
-    contact && contact !== '匿名高校生' && contact !== 'AIアシスタント' &&
+    contact && contact !== '匿名高校生' &&
     !socialConnections.blocked.includes(contact) &&
-    contact !== schoolInfo.handleName && !contact.includes(`_${schoolInfo.handleName}`)
+    contact !== dmIdentity
   ));
   const filteredDmContacts = dmContacts.filter(contact => contact.toLowerCase().includes(dmSearchQuery.trim().toLowerCase()));
   const activeProfilePosts = activeProfileName ? posts.filter(post => post.authorName === activeProfileName) : [];
@@ -1018,7 +1106,7 @@ export default function App() {
                   </div>
                   <div>
                     <h2 className="font-bold text-base">{schoolInfo.grade}{schoolInfo.classNum} 限定ラウンジ</h2>
-                    <p className="text-xs text-slate-400">送信後、AIアシスタントが自動返信します。本文は返信生成のためOpenAIへ送信されます。</p>
+                    <p className="text-xs text-slate-400">クラスメイトとリアルタイムでメッセージを共有できます。</p>
                   </div>
                 </div>
               </div>
@@ -1027,22 +1115,16 @@ export default function App() {
               <div className="flex-1 p-4 space-y-3 overflow-y-auto">
                 {loungeMessages.map(msg => {
                   const isMe = msg.sender === schoolInfo.handleName;
-                  const isAi = msg.isAi;
                   return (
-                    <div key={msg.id} className={`flex flex-col ${isMe && !isAi ? 'items-end' : 'items-start'}`}>
-                      <span className={`text-[10px] mb-0.5 px-1 ${isAi ? 'font-semibold text-indigo-500' : 'text-slate-400'}`}>{msg.sender}</span>
-                      <div className={`max-w-[75%] p-3 rounded-2xl text-xs ${
-                        isAi
-                          ? 'border border-indigo-200 bg-indigo-50 text-indigo-900 dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-100'
-                          : isMe
+                    <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                      <span className="mb-0.5 px-1 text-[10px] text-slate-400">{msg.sender}</span>
+                      <div className={`max-w-[75%] p-3 rounded-2xl text-xs ${isMe
                           ? 'bg-indigo-600 text-white rounded-br-none' 
                           : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-bl-none'
                       }`}>
                         {msg.text}
                       </div>
                       <span className="text-[9px] text-slate-400 mt-0.5">{msg.time}</span>
-                      {msg.aiReplyStatus === 'pending' && <span className="mt-1 text-[10px] text-indigo-500">AIアシスタントが返信を作成中...</span>}
-                      {msg.aiReplyStatus === 'error' && <span className="mt-1 max-w-[85%] text-[10px] text-rose-500">AI自動返信に失敗しました: {msg.aiReplyError}</span>}
                     </div>
                   );
                 })}
@@ -1130,7 +1212,7 @@ export default function App() {
                       {(dmThreads[selectedDmContact] || []).length === 0 ? (
                         <p className="py-10 text-center text-xs text-slate-400">{selectedDmContact}さんとの会話を始めましょう。</p>
                       ) : (dmThreads[selectedDmContact] || []).map(message => {
-                        const isMe = message.sender === schoolInfo.handleName;
+                        const isMe = message.sender === dmIdentity;
                         return (
                           <div key={message.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                             <span className="mb-1 px-1 text-[10px] text-slate-400">{isMe ? '自分' : selectedDmContact}</span>
@@ -1170,6 +1252,7 @@ export default function App() {
                         </div>
                       )}
                       {dmMediaError && <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">{dmMediaError}</p>}
+                      {dmSendError && <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">{dmSendError}</p>}
                       <p className="text-[10px] leading-relaxed text-slate-400">画像は4枚・各5MBまで。顔や個人情報が目立つ写真は避けてください。</p>
                       <div className="flex items-center gap-2">
                         <label title="画像を添付" className="cursor-pointer rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-indigo-600 dark:hover:bg-slate-800">
@@ -1194,7 +1277,6 @@ export default function App() {
                         </button>
                       </div>
                     </form>
-                    <p className="px-3 pb-2 text-center text-[10px] text-amber-600 dark:text-amber-400">この試作ではメッセージはこの画面内だけに保存され、相手には配信されません。</p>
                   </>
                 ) : (
                   <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
@@ -1523,19 +1605,16 @@ export default function App() {
                 visibleComments.map(comment => (
                   <div key={comment.id} className="p-3 bg-slate-100/60 dark:bg-slate-700/20 rounded-xl space-y-1 text-xs">
                     <div className="flex justify-between font-bold">
-                      <button type="button" onClick={() => !comment.isAi && comment.author !== '匿名高校生' && setActiveProfileName(comment.author)} disabled={comment.isAi || comment.author === '匿名高校生'} className={`text-left enabled:hover:underline disabled:cursor-default ${comment.isAi ? 'text-indigo-600 dark:text-indigo-300' : ''}`}>{comment.author}</button>
+                      <button type="button" onClick={() => comment.author !== '匿名高校生' && setActiveProfileName(comment.author)} disabled={comment.author === '匿名高校生'} className="text-left enabled:hover:underline disabled:cursor-default">{comment.author}</button>
                       <span className="text-[10px] text-slate-400 font-normal">{comment.timestamp}</span>
                     </div>
                     <p className="text-slate-700 dark:text-slate-300">{comment.text}</p>
-                    {comment.aiReplyStatus === 'pending' && <p className="text-[10px] text-indigo-500">AIアシスタントが返信を作成中...</p>}
-                    {comment.aiReplyStatus === 'error' && <p className="text-[10px] text-rose-500">AI自動返信に失敗しました: {comment.aiReplyError}</p>}
                   </div>
                 ))
               )}
             </div>
 
             {/* Comment Form */}
-            <p className="text-[10px] leading-relaxed text-slate-400">コメント本文はAI返信の生成時にOpenAIへ送信されます。返信はAIアシスタント名義で表示されます。</p>
             <form onSubmit={handleAddComment} className="flex gap-2 pt-2">
               <input
                 type="text"
